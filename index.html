@@ -3,7 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
-  <meta name="theme-color" content="#8f9188" />
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#1b1c1f" media="(prefers-color-scheme: dark)" />
+  <meta name="color-scheme" content="light dark" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="referrer" content="no-referrer" />
   <link rel="manifest" href="./manifest.webmanifest" />
@@ -12,81 +14,48 @@
   <title>PQTalk</title>
 </head>
 <body>
-  <div class="desk">
-    <div class="radio" id="radio">
-      <div class="body">
-
-        <div class="top-row">
-          <div class="badge"><b>PQTalk</b><span>PQ-1 encrypted handheld</span></div>
-          <div class="leds">
-            <span class="led-wrap"><i class="led tx" id="ledTx"></i><span class="silk">Tx</span></span>
-            <span class="led-wrap"><i class="led rx" id="ledRx"></i><span class="silk">Rx</span></span>
-            <span class="led-wrap"><i class="led link" id="relayDot"></i><span class="silk">Link</span></span>
-            <div class="knob-well">
-              <div class="knob" id="knob" role="slider" tabindex="0" aria-label="Volume" aria-valuemin="0" aria-valuemax="100" aria-valuenow="80">
-                <div class="knob-cap"><span class="knob-mark"></span></div>
-              </div>
-              <span class="silk knob-label">Vol</span>
-      </div>
-          </div>
-        </div>
-
-        <div class="bezel">
-          <div class="lcd" id="lcd">
-            <!-- powered-off / join state -->
-            <form id="join" class="lcd-page" onsubmit="return false">
-              <div class="lcd-head"><span>Standby</span><span>No channel</span></div>
-              <label class="lcd-field">Name<input id="nick" maxlength="24" autocomplete="nickname" placeholder="your callsign" /></label>
-              <label class="lcd-field">Channel code<input id="code" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="paste code or start new" /></label>
-              <p id="joinErr" class="lcd-err" role="alert"></p>
-            </form>
-
-            <!-- on-channel state -->
-            <div id="chan" class="lcd-page hidden">
-              <div class="lcd-head"><span id="chanCode" title=""></span><span id="lcdLock">E2EE</span></div>
-              <div id="roster" class="lcd-roster"></div>
-              <div class="lcd-foot">
-                <div id="talker" class="lcd-talker">Channel clear</div>
-                <div class="lcd-meter" aria-hidden="true"><div id="lvl"></div></div>
-                <div id="usage" class="lcd-usage"></div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="keys" id="joinKeys">
-          <button id="btnNew" class="key">New channel</button>
-          <button id="btnJoin" class="key key-go">Join</button>
-        </div>
-        <div class="keys hidden" id="chanKeys">
-          <button id="btnInvite" class="key">Invite</button>
-          <button id="btnLeave" class="key key-stop">Leave</button>
-        </div>
-
-        <div class="grille" aria-hidden="true"></div>
-
-        <button id="ptt" class="ptt" disabled>
-          <span id="pttLabel">Push to talk</span>
-          <span id="pttSub" class="sub">or hold Space</span>
-        </button>
-      </div>
+  <main id="join" class="screen join">
+    <div class="join-head">
+      <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
+      <h1>PQTalk</h1>
+      <p>Private push-to-talk for your group</p>
     </div>
-
-    <p class="note" id="joinNote">Share the channel code over Signal or another app you trust. Anyone who has it can join.
+    <form class="fields" onsubmit="return false">
+      <label>Your name<input id="nick" maxlength="24" autocomplete="nickname" placeholder="How others will see you" /></label>
+      <label>Channel code<input id="code" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Paste a code you were sent" /></label>
+      <p id="joinErr" class="err" role="alert"></p>
+      <button id="btnJoin" class="btn primary">Join channel</button>
+      <button id="btnNew" class="btn quiet" type="button">Start a new channel</button>
+    </form>
+    <p class="note">Share the channel code over Signal or another app you trust. Anyone who has it can join.
       Audio travels device to device, encrypted with keys only members hold.</p>
+  </main>
 
-    <section class="rear hidden" id="rear">
+  <main id="chan" class="screen hidden">
+    <header class="bar">
+      <div class="bar-title">
+        <h2 id="chanCode"></h2>
+        <p><span id="relayDot" class="dot"></span><span id="encLine">End-to-end encrypted</span></p>
+      </div>
+      <button id="btnInvite" class="btn small tint">Invite</button>
+      <button id="btnLeave" class="btn small quiet danger">Leave</button>
+    </header>
+
+    <div id="roster" class="list"></div>
+
+    <section class="settings">
       <details>
         <summary>Settings</summary>
         <div class="grid">
-          <label>Opus bitrate
-            <select id="setBitrate"><option value="6000">6 kbps</option><option value="8000">8 kbps</option><option value="12000">12 kbps</option><option value="16000">16 kbps</option><option value="24000">24 kbps</option></select></label>
+          <label>Volume <input id="vol" type="range" min="0" max="100" step="5" /></label>
+          <label>Audio quality
+            <select id="setBitrate"><option value="6000">6 kbps, least data</option><option value="8000">8 kbps</option><option value="12000">12 kbps</option><option value="16000">16 kbps</option><option value="24000">24 kbps, clearest</option></select></label>
           <label>Packet size
             <select id="setPtime"><option value="20">20 ms, lowest delay</option><option value="40">40 ms</option><option value="60">60 ms, least data</option></select></label>
           <label>Microphone <select id="setMic"></select></label>
           <label>Speaker <select id="setSpk"></select></label>
           <label class="chk"><input type="checkbox" id="setLatch" /> Tap to talk instead of holding (best for Bluetooth buttons)</label>
-          <label class="chk"><input type="checkbox" id="setRoger" /> Send a roger beep when you release</label>
+          <label class="chk"><input type="checkbox" id="setRoger" /> Send a beep when you finish talking</label>
           <label class="chk"><input type="checkbox" id="setTalkOver" /> Allow talking over others</label>
           <label class="chk"><input type="checkbox" id="setRelayOnly" /> Hide my IP address (relay only, applies next time you join)</label>
         </div>
@@ -103,11 +72,20 @@
       </details>
       <details>
         <summary>Security and diagnostics</summary>
+        <div id="usage" class="diag"></div>
         <div id="secInfo" class="diag"></div>
         <pre id="log" class="diag log"></pre>
       </details>
     </section>
-  </div>
+
+    <footer class="dock">
+      <p id="talker" class="talker">Channel clear</p>
+      <button id="ptt" class="ptt" aria-labelledby="pttLabel">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+      <p class="ptt-text"><span id="pttLabel">Hold to talk</span><span id="pttSub"></span></p>
+    </footer>
+  </main>
 
   <div id="toast" class="toast hidden" role="status"></div>
   <script type="module" src="./src/main.js"></script>

@@ -1,7 +1,4 @@
-import '@fontsource/doto/700.css';
-import '@fontsource/doto/900.css';
-import '@fontsource/barlow-condensed/500.css';
-import '@fontsource/barlow-condensed/600.css';
+import '@fontsource-variable/inter';
 import './style.css';
 import { generateCode, normalizeCode, formatCode } from './crypto/code.js';
 import { loadIdentity } from './crypto/identity.js';
@@ -77,7 +74,7 @@ $('btnJoin').onclick = async () => {
     if (settings.spk) room.setSink(settings.spk);
     wireRoom(room);
     await room.start();
-    $('chanCode').textContent = `Ch ${formatCode(code).slice(0, 9)}…`;
+    $('chanCode').textContent = `Channel ${formatCode(code).slice(0, 9)}`;
     $('chanCode').title = formatCode(code);
     setPowered(true);
     acquireWakeLock(); setupMediaSession(); fillDevices(); render();
@@ -98,10 +95,9 @@ $('btnLeave').onclick = () => {
 };
 
 function setPowered(on) {
-  for (const id of ['join', 'joinKeys', 'joinNote']) $(id).classList.toggle('hidden', on);
-  for (const id of ['chan', 'chanKeys', 'rear']) $(id).classList.toggle('hidden', !on);
-  $('ptt').disabled = !on;
-  if (!on) { $('ledTx').classList.remove('on'); $('ledRx').classList.remove('on'); $('lcd').classList.remove('lit'); $('relayDot').className = 'led link'; }
+  $('join').classList.toggle('hidden', on);
+  $('chan').classList.toggle('hidden', !on);
+  if (!on) { $('relayDot').className = 'dot'; $('ptt').classList.remove('on', 'busy'); render.last = null; }
 }
 addEventListener('pagehide', () => room?.leave());
 
@@ -123,8 +119,8 @@ function wireRoom(r) {
   r.addEventListener('stats', renderUsage);
   r.addEventListener('sk', render);
   r.addEventListener('relay', ({ detail: { up, total } }) => {
-    $('relayDot').className = 'led link ' + (up === total ? 'ok' : up ? 'partial' : '');
-    $('relayDot').title = `relays connected: ${up}/${total}`;
+    $('relayDot').className = 'dot ' + (up === total ? 'ok' : up ? 'partial' : '');
+    $('relayDot').title = `Relays connected: ${up} of ${total}`;
   });
   r.addEventListener('ptt', ({ detail: { on } }) => { if (on) audio.tone('rx'); render(); });
   r.addEventListener('needs-gesture', () => toast('Tap anywhere to enable audio'));
@@ -135,38 +131,42 @@ function wireRoom(r) {
 document.addEventListener('click', () => room?.peers.forEach((p) => p.audio?.paused && p.audio.play().catch(() => {})));
 
 const esc = (s) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-const STATUS = { handshake: 'keys…', connecting: 'link…', connected: 'ok', reconnecting: 'retry' };
-const ROUTE = { 'direct (LAN)': 'lan', 'direct (P2P)': 'p2p', 'TURN relay': 'relay' };
+const STATUS = { handshake: 'Exchanging keys…', connecting: 'Connecting…', connected: 'Connected', reconnecting: 'Reconnecting…' };
+const ROUTE = { 'direct (LAN)': 'Same network', 'direct (P2P)': 'Direct', 'TURN relay': 'Relayed' };
+const CHECK = '<svg viewBox="0 0 24 24" aria-label="Verified"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm-1.4 14.2-4-4 1.6-1.6 2.4 2.4 5.2-5.2 1.6 1.6Z"/></svg>';
+const CHEV = '<svg class="chev" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const hue = (seed) => { let h = 0; for (const c of seed) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+const avatar = (name, seed) => `<span class="av" style="--h:${hue(seed)}" aria-hidden="true">${esc(name.trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join('').toUpperCase() || '?')}</span>`;
+
 function render() {
   if (!room) return;
   const talkers = [...room.peers.values()].filter((p) => p.talking);
-  const rows = [`<div class="lrow me ${room.talking ? 'talking' : ''}"><span>${room.talking ? '▶' : ''}</span>
-    <span class="nm">${esc(room.nick)} (you)</span><span class="st">${room.talking ? 'tx' : ''}</span></div>`];
+  const rows = [`<div class="row me ${room.talking ? 'talking' : ''}">${avatar(room.nick, room.peerId)}
+    <span class="who"><span class="nm">${esc(room.nick)}</span><span class="sub">${room.talking ? 'Talking…' : 'You'}</span></span></div>`];
   for (const p of room.peers.values()) {
     if (p.audio) p.audio.volume = settings.volume;
     const isV = verified.has(bytesToHex(p.ik));
     const s = p.stats || {};
-    const st = p.talking ? 'rx' : p.status === 'connected'
-      ? [ROUTE[s.route], s.rtt != null ? `${s.rtt}ms` : null].filter(Boolean).join(' ') || 'ok'
+    const st = p.talking ? 'Talking…' : p.status === 'connected'
+      ? [ROUTE[s.route], s.rtt != null ? `${s.rtt} ms` : null].filter(Boolean).join(', ') || 'Connected'
       : STATUS[p.status] ?? p.status;
-    rows.push(`<button class="lrow ${p.talking ? 'talking' : ''}" data-id="${p.id}" data-act="verify" aria-expanded="${!!p.open}"
-      title="Show safety number"><span>${p.talking ? '▶' : isV ? '✓' : ''}</span><span class="nm">${esc(p.nick)}</span><span class="st">${st}</span></button>`);
-    if (p.open && p.safety) rows.push(`<div class="lcd-sn" data-id="${p.id}">${p.safety}
-      <small>Read this aloud with ${esc(p.nick)}. If both screens match, nobody is listening in.</small>
-      <button class="softkey" data-act="mark">${isV ? 'Clear verified' : 'Mark verified'}</button></div>`);
+    rows.push(`<button class="row ${p.talking ? 'talking' : ''}" data-id="${p.id}" data-act="verify" aria-expanded="${!!p.open}">
+      ${avatar(p.nick, p.id)}<span class="who"><span class="nm">${esc(p.nick)}${isV ? CHECK : ''}</span><span class="sub">${st}</span></span>${CHEV}</button>`);
+    if (p.open && p.safety) rows.push(`<div class="safety" data-id="${p.id}">
+      <p class="sn">${p.safety.split(' ').map((g) => `<span>${g}</span>`).join('')}</p>
+      <p class="hint">Compare this safety number with ${esc(p.nick)} in person or on a call. If it matches on both screens, nobody is listening in.</p>
+      <button class="btn small tint" data-act="mark">${isV ? 'Clear verification' : 'Mark as verified'}</button></div>`);
   }
-  if (!room.peers.size) rows.push('<div class="lrow me"><span></span><span class="nm">Waiting for others…</span><span></span></div>');
+  if (!room.peers.size) rows.push('<p class="empty">No one else is here yet. Send an invite to bring people in.</p>');
   const html = rows.join('');
   if (html !== render.last) { $('roster').innerHTML = html; render.last = html; } // keep rows stable under the finger
 
-  $('talker').textContent = room.talking ? 'Transmitting' : talkers.length ? `Rx ${talkers.map((p) => p.nick).join(', ')}` : 'Channel clear';
-  $('ledTx').classList.toggle('on', room.talking);
-  $('ledRx').classList.toggle('on', talkers.length > 0);
-  $('lcd').classList.toggle('lit', room.talking || talkers.length > 0);
-  $('lcdLock').textContent = room.sk ? `E2EE k${room.sk.epoch}` : 'E2EE';
-  $('ptt').classList.toggle('busy', !room.talking && talkers.length > 0);
-  $('pttLabel').textContent = room.talking ? (settings.latch ? 'Tap to stop' : 'Talking') : settings.latch ? 'Tap to talk' : 'Push to talk';
-  $('pttSub').textContent = room.talking ? 'release to send roger' : talkers.length ? `${talkers[0].nick} is talking` : settings.latch ? 'or press Space' : 'or hold Space';
+  const t = $('talker');
+  t.className = 'talker ' + (room.talking ? 'tx' : talkers.length ? 'rx' : '');
+  t.textContent = room.talking ? 'You are talking' : talkers.length ? `${talkers.map((p) => p.nick).join(', ')} ${talkers.length > 1 ? 'are' : 'is'} talking` : 'Channel clear';
+  $('ptt').classList.toggle('busy', !room.talking && talkers.length > 0 && !settings.talkOver);
+  $('pttLabel').textContent = room.talking ? (settings.latch ? 'Tap to stop' : 'Release to finish') : settings.latch ? 'Tap to talk' : 'Hold to talk';
+  $('pttSub').textContent = room.talking || matchMedia('(pointer: coarse)').matches ? '' : settings.latch ? 'or press Space' : 'or hold Space';
   $('secInfo').textContent = [
     `Frame encryption: ${room.mode === 'script' ? 'RTCRtpScriptTransform' : 'Insertable Streams (legacy)'}, SFrame AES-128-CTR + HMAC-SHA256-80`,
     `Pairwise: X25519 + ML-KEM-768 hybrid + room PSK, symmetric ratchet, PQ re-key every 5 min`,
@@ -180,7 +180,7 @@ function renderUsage() {
   if (!room) return;
   let tx = 0, rx = 0, total = 0, txp = 0;
   for (const p of room.peers.values()) { const s = p.stats || {}; tx += s.txKbps || 0; rx += s.rxKbps || 0; txp += s.txPps || 0; total += s.totalBytes || 0; }
-  $('usage').textContent = `↑${tx.toFixed(1)}k ↓${rx.toFixed(1)}k ${txp ? `${txp.toFixed(0)}pk/s ` : ''}${(total / 1e6).toFixed(2)}MB`;
+  $('usage').textContent = `Sending ${tx.toFixed(1)} kbps${txp ? ` (${txp.toFixed(0)} packets/s)` : ''}, receiving ${rx.toFixed(1)} kbps, ${(total / 1e6).toFixed(2)} MB this session`;
   render();
 }
 
@@ -224,8 +224,8 @@ addEventListener('keydown', (e) => { if (e.code === 'Space' && !e.repeat && room
 addEventListener('keyup', (e) => { if (e.code === 'Space' && room && !typing() && !settings.latch) { e.preventDefault(); stopTx(); } });
 
 function meterLoop() {
-  if (!room?.talking) { $('lvl').style.width = '0'; return; }
-  $('lvl').style.width = `${audio.level() * 100}%`;
+  if (!room?.talking) { ptt.style.setProperty('--lvl', 0); return; }
+  ptt.style.setProperty('--lvl', audio.level().toFixed(2));
   requestAnimationFrame(meterLoop);
 }
 
@@ -243,29 +243,13 @@ async function acquireWakeLock() {
 }
 document.addEventListener('visibilitychange', () => { if (room && document.visibilityState === 'visible') acquireWakeLock(); });
 
-// ---------- volume knob: drag up/right or use arrow keys; 270° sweep ----------
-const knob = $('knob');
-function setVolume(v) {
-  settings.volume = Math.max(0, Math.min(1, v));
-  knob.style.setProperty('--rot', `${-135 + settings.volume * 270}deg`);
-  knob.setAttribute('aria-valuenow', Math.round(settings.volume * 100));
+// ---------- volume ----------
+const vol = $('vol');
+vol.value = Math.round(settings.volume * 100);
+vol.oninput = () => {
+  settings.volume = vol.value / 100; saveSettings();
   room?.peers.forEach((p) => { if (p.audio) p.audio.volume = settings.volume; });
-}
-setVolume(settings.volume);
-knob.addEventListener('pointerdown', (e) => {
-  knob.setPointerCapture(e.pointerId);
-  const start = { x: e.clientX, y: e.clientY, v: settings.volume };
-  const move = (ev) => setVolume(start.v + ((ev.clientX - start.x) - (ev.clientY - start.y)) / 160);
-  const up = () => { knob.removeEventListener('pointermove', move); saveSettings(); };
-  knob.addEventListener('pointermove', move);
-  knob.addEventListener('pointerup', up, { once: true });
-  knob.addEventListener('pointercancel', up, { once: true });
-});
-knob.addEventListener('keydown', (e) => {
-  const d = { ArrowUp: .05, ArrowRight: .05, ArrowDown: -.05, ArrowLeft: -.05 }[e.key];
-  if (d) { e.preventDefault(); setVolume(settings.volume + d); saveSettings(); }
-});
-knob.addEventListener('wheel', (e) => { e.preventDefault(); setVolume(settings.volume - e.deltaY / 1000); saveSettings(); }, { passive: false });
+};
 
 // ---------- settings UI ----------
 const bind = (id, key, { type = 'value', live } = {}) => {
