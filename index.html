@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
   <meta name="theme-color" content="#1b1c1f" media="(prefers-color-scheme: dark)" />
   <meta name="color-scheme" content="light dark" />
@@ -14,79 +14,8 @@
   <title>PQTalk</title>
 </head>
 <body>
-  <main id="join" class="screen join">
-    <div class="join-head">
-      <span class="mark" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span>
-      <h1>PQTalk</h1>
-      <p>Private push-to-talk for your group</p>
-    </div>
-    <form class="fields" onsubmit="return false">
-      <label>Your name<input id="nick" maxlength="24" autocomplete="nickname" placeholder="How others will see you" /></label>
-      <label>Channel code<input id="code" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Paste a code you were sent" /></label>
-      <p id="joinErr" class="err" role="alert"></p>
-      <button id="btnJoin" class="btn primary">Join channel</button>
-      <button id="btnNew" class="btn quiet" type="button">Start a new channel</button>
-    </form>
-    <p class="note">Share the channel code over Signal or another app you trust. Anyone who has it can join.
-      Audio travels device to device, encrypted with keys only members hold.</p>
-  </main>
-
-  <main id="chan" class="screen hidden">
-    <header class="bar">
-      <div class="bar-title">
-        <h2 id="chanCode"></h2>
-        <p><span id="relayDot" class="dot"></span><span id="encLine">End-to-end encrypted</span></p>
-      </div>
-      <button id="btnInvite" class="btn small tint">Invite</button>
-      <button id="btnLeave" class="btn small quiet danger">Leave</button>
-    </header>
-
-    <div id="roster" class="list"></div>
-
-    <section class="settings">
-      <details>
-        <summary>Settings</summary>
-        <div class="grid">
-          <label>Volume <input id="vol" type="range" min="0" max="100" step="5" /></label>
-          <label>Audio quality
-            <select id="setBitrate"><option value="6000">6 kbps, least data</option><option value="8000">8 kbps</option><option value="12000">12 kbps</option><option value="16000">16 kbps</option><option value="24000">24 kbps, clearest</option></select></label>
-          <label>Packet size
-            <select id="setPtime"><option value="20">20 ms, lowest delay</option><option value="40">40 ms</option><option value="60">60 ms, least data</option></select></label>
-          <label>Microphone <select id="setMic"></select></label>
-          <label>Speaker <select id="setSpk"></select></label>
-          <label class="chk"><input type="checkbox" id="setLatch" /> Tap to talk instead of holding (best for Bluetooth buttons)</label>
-          <label class="chk"><input type="checkbox" id="setRoger" /> Send a beep when you finish talking</label>
-          <label class="chk"><input type="checkbox" id="setTalkOver" /> Allow talking over others</label>
-          <label class="chk"><input type="checkbox" id="setRelayOnly" /> Hide my IP address (relay only, applies next time you join)</label>
-        </div>
-        <h4>TURN relay</h4>
-        <p class="hint">Only needed when phones on some cellular networks can't connect directly.</p>
-        <div class="grid">
-          <label>Credentials URL (Metered or your Cloudflare Worker)
-            <input id="turnApi" placeholder="https://yourapp.metered.live/api/v1/turn/credentials?apiKey=…" /></label>
-          <label>Or TURN server URLs, comma separated <input id="turnUrls" placeholder="turn:host:3478, turns:host:443?transport=tcp" /></label>
-          <label>Username <input id="turnUser" /></label>
-          <label>Password <input id="turnPass" type="password" /></label>
-          <label class="chk"><input type="checkbox" id="turnInInvite" /> Include these TURN settings in invite links</label>
-        </div>
-      </details>
-      <details>
-        <summary>Security and diagnostics</summary>
-        <div id="usage" class="diag"></div>
-        <div id="secInfo" class="diag"></div>
-        <pre id="log" class="diag log"></pre>
-      </details>
-    </section>
-
-    <footer class="dock">
-      <p id="talker" class="talker">Channel clear</p>
-      <button id="ptt" class="ptt" aria-labelledby="pttLabel">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-      </button>
-      <p class="ptt-text"><span id="pttLabel">Hold to talk</span><span id="pttSub"></span></p>
-    </footer>
-  </main>
-
+  <div id="app"></div>
+  <div id="overlay"></div>
   <div id="toast" class="toast hidden" role="status"></div>
   <script type="module" src="./src/main.js"></script>
 </body>
