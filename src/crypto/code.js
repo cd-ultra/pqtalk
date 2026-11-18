@@ -5,11 +5,13 @@ import { kdf, randomBytes, utf8, bytesToHex } from './prim.js';
 const ALPHA = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'; // Crockford: no I L O U
 export const CODE_CHARS = 32; // 32 * 5 = 160 bits (80-bit security even vs. Grover)
 
-export function generateCode() {
-  const bytes = randomBytes(20);
+export const generateCode = () => codeFromBytes(randomBytes(20));
+
+/** 20 bytes -> 32-char Crockford code (used to derive per-chat voice rooms from shared secrets). */
+export function codeFromBytes(bytes) {
   let bits = 0, val = 0, out = '';
-  for (const b of bytes) {
-    val = (val << 8) | b; bits += 8;
+  for (const b of bytes.subarray(0, 20)) {
+    val = ((val << 8) | b) & 0xffff; bits += 8;
     while (bits >= 5) { out += ALPHA[(val >>> (bits - 5)) & 31]; bits -= 5; }
   }
   return formatCode(out);
