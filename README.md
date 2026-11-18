@@ -15,7 +15,7 @@ VITE_SERVER_URL=http://127.0.0.1:8787 npm run dev
 
 1. **Server.** `cd server && npx wrangler login && npx wrangler deploy`. It runs on the Workers free plan (SQLite-backed Durable Objects). Copy the `https://pqtalk-server.<you>.workers.dev` URL it prints.
 2. **App.** Every push to `main` builds and publishes the app to GitHub Pages with the server address from `.env.production` built in. To point it at a different server, change that file, or set the Actions variable `SERVER_URL`, which takes priority.
-3. **Calls on strict cellular networks (optional).** Deploy `turn-worker/` (Cloudflare TURN, free tier) and paste its URL under Settings → Calls.
+3. **TURN relay for calls (recommended).** In the Cloudflare dashboard create a TURN key (Realtime → TURN Server → Create), then add its Token ID and API token to the `pqtalk-server` Worker as the secrets `TURN_KEY_ID` and `TURN_KEY_API_TOKEN`. The app then fetches short-lived TURN credentials from the server automatically. `/v1/turn/status` on the server shows whether it's configured.
 
 ## How it maps to Signal
 

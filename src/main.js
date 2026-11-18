@@ -74,9 +74,15 @@ let pendingInvite = null;
 
 async function iceServers() {
   const ice = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
-  if (prefs.turnApi) {
-    try { const j = await (await fetch(prefs.turnApi, { referrerPolicy: 'no-referrer' })).json(); ice.push(...(Array.isArray(j) ? j : j.iceServers ?? [])); }
-    catch { toast('Couldn’t get TURN credentials; calls may fail on some networks'); }
+  try {
+    if (prefs.turnApi) { // manual override in Settings
+      const j = await (await fetch(prefs.turnApi, { referrerPolicy: 'no-referrer' })).json();
+      ice.push(...(Array.isArray(j) ? j : j.iceServers ?? []));
+    } else if (m?.api) { // default: short-lived credentials from our own server
+      ice.push(...((await m.api.turn()).iceServers ?? []));
+    }
+  } catch (e) {
+    console.debug('[pqtalk] no TURN relay:', e.message); // direct and STUN routes still work
   }
   return ice;
 }
@@ -521,7 +527,7 @@ function renderSettings() {
     <section class="section"><h3>Profile</h3><div class="row"><input class="t" id="setName" value="${esc(m.account.name)}" maxlength="40" style="flex:3" />
       <button class="btn tint" data-act="saveName">Save</button></div></section>
     <section class="section"><h3>Notifications</h3><label class="pick"><input type="checkbox" id="setNotify" ${prefs.notify ? 'checked' : ''} /><span>Show a notification for new messages while PQTalk is open</span></label></section>
-    <section class="section"><h3>Calls</h3><label class="f">TURN credentials URL (only needed when calls fail on some cellular networks)
+    <section class="section"><h3>Calls</h3><label class="f">Custom TURN credentials URL (optional; leave empty to use the server's built-in relay)
       <input class="t" id="setTurn" value="${esc(prefs.turnApi)}" placeholder="https://yourapp.metered.live/api/v1/turn/credentials?apiKey=…" /></label></section>
     <section class="section"><h3>Security</h3><p class="diag">Identity key ${fp}…
 Server ${esc(m.account.server)}
