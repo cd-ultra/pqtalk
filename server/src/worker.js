@@ -41,12 +41,21 @@ async function verifyAuth(auth, method, path, body, ik) {
   try { return ed25519.verify(b64d(sig), msg, b64d(ik)); } catch { return false; }
 }
 
+/** Which TURN source is set up: a credentials URL (Metered Open Relay, free, no card), static
+ *  credentials (e.g. ExpressTURN), or Cloudflare Realtime TURN. */
+function turnProvider(env) {
+  if (env.TURN_CREDENTIALS_URL) return 'url';
+  if (env.TURN_URLS && env.TURN_USERNAME && env.TURN_CREDENTIAL) return 'static';
+  if (env.TURN_KEY_ID && env.TURN_KEY_API_TOKEN) return 'cloudflare';
+  return null;
+}
+
 export default {
   async fetch(req, env) {
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
     const url = new URL(req.url);
     const parts = url.pathname.split('/').filter(Boolean); // v1, kind, id, ...
-    if (url.pathname === '/v1/turn/status') return json({ configured: !!(env.TURN_KEY_ID && env.TURN_KEY_API_TOKEN) });
+    if (url.pathname === '/v1/turn/status') return json({ configured: !!turnProvider(env), provider: turnProvider(env) });
     if (parts[0] !== 'v1' || !HEX32.test(parts[2] ?? '')) {
       return url.pathname === '/' ? new Response('PQTalk mailbox server', { headers: CORS }) : err(404, 'not found');
     }
@@ -149,20 +158,28 @@ export class Mailbox extends DurableObject {
     return err(404, 'not found');
   }
 
-  // One credential per mailbox, reused until an hour before it expires, so a client can't
-  // mint credentials in a loop. The TURN API token never leaves Cloudflare.
+  // One credential set per mailbox, reused until an hour before it expires, so a client can't
+  // mint credentials in a loop. Provider keys stay in the server's secrets.
   async _turn() {
-    const { TURN_KEY_ID: id, TURN_KEY_API_TOKEN: token } = this.env;
-    if (!id || !token) return err(503, 'turn not configured');
+    const env = this.env, provider = turnProvider(env);
+    if (!provider) return err(503, 'turn not configured');
     const cached = await this.ctx.storage.get('turn');
     if (cached && cached.exp - Date.now() > 3600_000) return json({ iceServers: cached.iceServers });
-    const r = await fetch(`${this.env.TURN_API || TURN_API}/${id}/credentials/generate-ice-servers`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ ttl: TURN_TTL }),
-    });
-    if (!r.ok) return err(502, `turn provider ${r.status}`);
-    const { iceServers = [] } = await r.json();
+    let iceServers;
+    if (provider === 'static') {
+      iceServers = [{ urls: env.TURN_URLS.split(',').map((u) => u.trim()).filter(Boolean), username: env.TURN_USERNAME, credential: env.TURN_CREDENTIAL }];
+    } else {
+      const r = provider === 'url'
+        ? await fetch(env.TURN_CREDENTIALS_URL)
+        : await fetch(`${env.TURN_API || TURN_API}/${env.TURN_KEY_ID}/credentials/generate-ice-servers`, {
+            method: 'POST',
+            headers: { authorization: `Bearer ${env.TURN_KEY_API_TOKEN}`, 'content-type': 'application/json' },
+            body: JSON.stringify({ ttl: TURN_TTL }),
+          });
+      if (!r.ok) return err(502, `turn provider ${r.status}`);
+      const j = await r.json();
+      iceServers = Array.isArray(j) ? j : j.iceServers ?? [];
+    }
     // Browsers block port 53, and a TURN URL on it only stalls connection setup until it times out.
     const clean = (Array.isArray(iceServers) ? iceServers : [iceServers]).map((s) => ({
       ...s, urls: [].concat(s.urls ?? []).filter((u) => !/:53(\?|$)/.test(u)),
