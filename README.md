@@ -14,7 +14,7 @@ VITE_SERVER_URL=http://127.0.0.1:8787 npm run dev
 ## Deploy (free)
 
 1. **Server.** `cd server && npx wrangler login && npx wrangler deploy`. It runs on the Workers free plan (SQLite-backed Durable Objects). Copy the `https://pqtalk-server.<you>.workers.dev` URL it prints.
-2. **App.** In the GitHub repo, go to Settings → Secrets and variables → Actions → Variables and add `SERVER_URL` with that address. Every push to `main` builds and publishes the app to GitHub Pages with the server address built in. Without the variable, the app asks for a server address on first launch.
+2. **App.** Every push to `main` builds and publishes the app to GitHub Pages with the server address from `.env.production` built in. To point it at a different server, change that file, or set the Actions variable `SERVER_URL`, which takes priority.
 3. **Calls on strict cellular networks (optional).** Deploy `turn-worker/` (Cloudflare TURN, free tier) and paste its URL under Settings → Calls.
 
 ## How it maps to Signal

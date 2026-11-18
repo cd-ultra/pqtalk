@@ -27,7 +27,8 @@ jobs:
       - run: npm test
       - run: npm run build
         env:
-          VITE_SERVER_URL: ${{ vars.SERVER_URL }}
+          # Repo variable SERVER_URL overrides the default mailbox server in .env.production.
+          VITE_SERVER_URL: ${{ vars.SERVER_URL || 'https://pqtalk-server.georgethedragonslayer-j.workers.dev' }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
