@@ -33,6 +33,7 @@ export class Api {
   }
   fetchMessages() { return this._req('GET', `/v1/mb/${this.mailbox}/msgs`, undefined, { signed: true }); }
   ack(ids) { return this._req('POST', `/v1/mb/${this.mailbox}/ack`, { ids }, { signed: true }); }
+  turn() { return this._req('POST', `/v1/mb/${this.mailbox}/turn`, {}, { signed: true }); }
   putBlob(id, bytes) { return this._req('PUT', `/v1/blob/${id}`, undefined, { raw: bytes }); }
   getBlob(id) { return this._req('GET', `/v1/blob/${id}`); }
 

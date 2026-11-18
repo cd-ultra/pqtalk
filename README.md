@@ -15,7 +15,10 @@ VITE_SERVER_URL=http://127.0.0.1:8787 npm run dev
 
 1. **Server.** `cd server && npx wrangler login && npx wrangler deploy`. It runs on the Workers free plan (SQLite-backed Durable Objects). Copy the `https://pqtalk-server.<you>.workers.dev` URL it prints.
 2. **App.** Every push to `main` builds and publishes the app to GitHub Pages with the server address from `.env.production` built in. To point it at a different server, change that file, or set the Actions variable `SERVER_URL`, which takes priority.
-3. **Calls on strict cellular networks (optional).** Deploy `turn-worker/` (Cloudflare TURN, free tier) and paste its URL under Settings → Calls.
+3. **TURN relay for calls (recommended).** Add one of these to the `pqtalk-server` Worker as secrets (Settings → Variables and Secrets, type Secret). The app then gets TURN credentials from the server automatically; `/v1/turn/status` shows which one is active.
+    - Free, no credit card: Metered Open Relay (20 GB/month). Secret `TURN_CREDENTIALS_URL` = your credentials URL, `https://<app>.metered.live/api/v1/turn/credentials?apiKey=<key>`.
+    - Static credentials (for example ExpressTURN): secrets `TURN_URLS` (comma separated), `TURN_USERNAME`, `TURN_CREDENTIAL`.
+    - Cloudflare Realtime TURN: secrets `TURN_KEY_ID`, `TURN_KEY_API_TOKEN`. Requires a payment method on the Cloudflare account.
 
 ## How it maps to Signal
 
