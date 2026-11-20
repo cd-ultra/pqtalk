@@ -10,6 +10,9 @@ const DEFAULT_SERVER = (import.meta.env.VITE_SERVER_URL || '').replace(/\/+$/, '
 const $ = (s, r = document) => r.querySelector(s);
 const app = $('#app'), overlay = $('#overlay');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+// Replace an element's contents only when they actually changed. Redrawing on every status
+// tick swaps buttons out from under a finger mid-tap, and the tap is lost.
+const setHTML = (el, html) => { if (!el || el.__html === html) return false; el.innerHTML = html; el.__html = html; return true; };
 const LS = { get: (k, d) => { try { return JSON.parse(localStorage.getItem('pqtalk.m.' + k)) ?? d; } catch { return d; } },
              set: (k, v) => localStorage.setItem('pqtalk.m.' + k, JSON.stringify(v)) };
 const prefs = Object.assign({ notify: false, turnApi: '' }, LS.get('prefs', {}));
@@ -160,11 +163,39 @@ function wire() {
 // ---------------- layout ----------------
 function renderShell() {
   app.innerHTML = `<aside class="side" id="side"></aside><main class="main" id="main"></main>`;
-  setRoute(route);
+  history.replaceState({ view: 'empty', conv: null, depth: 0 }, '');
+  setRoute({ view: 'empty', conv: null });
 }
+
+// Screens are browser-history entries, so the phone's back gesture and the browser's Back
+// button step back through the app instead of leaving it.
+const depth = () => history.state?.depth ?? 0;
+function go(view, conv = null, { replace = false } = {}) {
+  if (route.view === view && route.conv === conv) return setRoute({ view, conv });
+  if (view === 'empty') { if (depth() > 0) history.go(-depth()); else setRoute({ view, conv }); return; }
+  if (replace && depth() > 0) history.replaceState({ view, conv, depth: depth() }, '');
+  else history.pushState({ view, conv, depth: depth() + 1 }, '');
+  setRoute({ view, conv });
+}
+function goBack() { if (depth() > 0) history.back(); else setRoute({ view: 'empty', conv: null }); }
+const afterPop = []; // run once the browser has finished stepping back
+addEventListener('popstate', (e) => {
+  if (!m?.account) return;
+  const st = e.state?.view ? e.state : { view: 'empty', conv: null };
+  if (voice?.state?.mode === 'call' && !voice.state.hidden) { voice.state.hidden = true; renderOverlay(); }
+  if (overlay.querySelector('.viewer')) { setHTML(overlay, ''); renderOverlay(); }
+  setRoute({ view: st.view, conv: st.conv ?? null });
+  afterPop.splice(0).forEach((fn) => fn());
+});
+
+// Screens that load data before drawing check this before writing, so a slow screen can't draw
+// over the one you navigated to in the meantime.
+let navSeq = 0;
+const stale = (seq) => seq !== navSeq;
 
 function setRoute(r) {
   stopRecording(false);
+  navSeq++;
   route = r;
   m.openConv = r.view === 'chat' ? r.conv : null;
   app.dataset.pane = r.view === 'empty' ? 'side' : 'main';
@@ -177,7 +208,6 @@ function setRoute(r) {
   if (r.view === 'settings') renderSettings();
   refreshSide();
 }
-const go = (view, conv = null) => setRoute({ view, conv });
 
 async function refreshSide() {
   const side = $('#side'); if (!side || !m?.account) return;
@@ -191,21 +221,20 @@ async function refreshSide() {
     if (v.type === 'group' && v.lastFrom && v.lastFrom !== 'system' && v.lastText) {
       prev = `${v.lastFrom === 'me' ? 'You' : esc((await m.contact(v.lastFrom))?.name?.split(' ')[0] ?? '')}: ${prev}`;
     } else if (v.lastFrom === 'me' && v.lastText) prev = `You: ${prev}`;
-    const walk = voice?.walkieSeen.get(v.id);
     if (t.length) prev = 'typing…';
     else if (voice?.state?.conv === v.id) prev = voice.state.mode === 'ptt' ? 'On walkie-talkie' : 'In a call';
-    else if (walk && Date.now() - walk.ts < 10 * 60_000) prev = 'Walkie-talkie is on';
+    else if (voice?.walkieActive(v.id).length) prev = 'Walkie-talkie is on';
     return `<button class="conv" data-act="open" data-id="${esc(v.id)}" aria-current="${route.conv === v.id}">
       ${avatar(titles[i], v.id, 50, v.type === 'group')}
       <span class="mid"><span class="row1"><b>${esc(titles[i])}</b><time>${fmtShort(v.lastTs)}</time></span>
       <span class="row2"><span class="prev ${t.length ? 'typing' : ''}">${prev}</span>${v.unread ? `<span class="badge">${v.unread}</span>` : ''}</span></span></button>`;
   }));
-  side.innerHTML = `<header class="bar"><h1>Chats</h1>
+  setHTML(side, `<header class="bar"><h1>Chats</h1>
       <button class="icon" data-act="settings" aria-label="Settings">${icon('gear')}</button>
       <button class="icon" data-act="new" aria-label="New chat">${icon('edit')}</button></header>
     ${m.online === false ? '<p class="netbar">Connecting…</p>' : ''}
     <div class="scroll">${rows.join('') || `<div class="empty"><h2>No chats yet</h2><p>Share your invite link with someone to start chatting.</p>
-      <button class="btn primary" data-act="new">Invite someone</button></div>`}</div>`;
+      <button class="btn primary" data-act="new">Invite someone</button></div>`}</div>`);
 }
 
 // ---------------- chat ----------------
@@ -220,25 +249,28 @@ async function renderChat() {
 }
 
 async function refreshChatChrome() {
+  const seq = navSeq;
   const v = await m.conv(route.conv); if (!v || route.view !== 'chat' || !$('#chatBar')) return;
   const title = await m.convTitle(v);
   let sub = '', verified = false;
   if (v.type === 'group') sub = v.left ? 'You left this group' : `${v.members.length + 1} members`;
   else { const c = await m.contact(v.id); verified = !!c?.verified; sub = verified ? 'Verified' : 'Tap for safety number'; }
   const inCall = voice.state?.conv === v.id;
-  $('#chatBar').innerHTML = `<button class="icon back" data-act="home" aria-label="Back">${icon('back')}</button>
+  if (stale(seq)) return;
+  setHTML($('#chatBar'), `<button class="icon back" data-act="home" aria-label="Back">${icon('back')}</button>
     <button class="title" data-act="info">${avatar(title, v.id, 38, v.type === 'group')}<span class="who"><b>${esc(title)}${
       verified ? icon('shield', 'i vbadge') : ''}</b><small>${esc(sub)}</small></span></button>
     <button class="icon" data-act="walkie" aria-label="Walkie-talkie" ${v.left ? 'disabled' : ''} aria-pressed="${inCall && voice.state.mode === 'ptt'}">${icon('radio')}</button>
-    <button class="icon" data-act="call" aria-label="Voice call" ${v.left || (voice.state && !inCall) ? 'disabled' : ''}>${icon('phone')}</button>`;
-  const walk = voice.walkieSeen.get(v.id);
+    <button class="icon" data-act="call" aria-label="Voice call" ${v.left || (voice.state && !inCall) ? 'disabled' : ''}>${icon('phone')}</button>`);
+  const walkers = voice.walkieActive(v.id);
   const banner = $('#banner');
-  if (!inCall && walk && Date.now() - walk.ts < 10 * 60_000) {
-    const who = (await m.contact(walk.from))?.name ?? 'Someone';
-    banner.innerHTML = `<div class="banner">${icon('radio')}<span>${esc(who)} turned on walkie-talkie</span><button class="btn small tint" data-act="walkie">Join</button></div>`;
+  if (!inCall && walkers.length) {
+    const who = (await Promise.all(walkers.map((id) => m.contact(id)))).map((c) => c?.name ?? 'Someone').join(', ');
+    if (stale(seq)) return;
+    setHTML(banner, `<div class="banner">${icon('radio')}<span>${esc(who)} ${walkers.length > 1 ? 'are' : 'is'} on walkie-talkie</span><button class="btn small tint" data-act="walkie">Join</button></div>`);
   } else if (inCall && voice.state.mode === 'call' && voice.state.hidden) {
-    banner.innerHTML = `<div class="banner">${icon('phone')}<span>Call in progress</span><button class="btn small tint" data-act="showcall">Return to call</button></div>`;
-  } else banner.innerHTML = '';
+    setHTML(banner, `<div class="banner">${icon('phone')}<span>Call in progress</span><button class="btn small tint" data-act="showcall">Return to call</button></div>`);
+  } else setHTML(banner, '');
   renderDock(v);
 }
 
@@ -298,10 +330,12 @@ async function refreshMsgs(scrollEnd = false) {
   const box = $('#msgs'); if (!box) return;
   const sc = $('#scroller');
   const atEnd = scrollEnd || sc.scrollHeight - sc.scrollTop - sc.clientHeight < 80;
+  const seq = navSeq;
   const v = await m.conv(route.conv);
   const list = await m.messages(route.conv);
   const names = new Map();
   for (const x of list) if (x.from !== 'me' && x.from !== 'system' && !names.has(x.from)) names.set(x.from, (await m.contact(x.from))?.name ?? 'Unknown');
+  if (stale(seq) || !box.isConnected) return;
   let html = '', lastDay = '';
   list.forEach((x, i) => {
     const day = new Date(x.ts).toDateString();
@@ -326,7 +360,7 @@ async function refreshMsgs(scrollEnd = false) {
     html += `<div class="m ${me ? 'me' : ''} ${same(prev) ? '' : 'gap'} ${same(next) ? '' : 'last'}" data-id="${esc(x.id)}">
       ${me || v?.type !== 'group' ? '' : avatar(name, x.from, 28)}${inner}</div>`;
   });
-  box.innerHTML = html || `<div class="empty">${icon('shield')}<p>Messages in this chat are end-to-end encrypted with post-quantum keys. Only the people in it can read them.</p></div>`;
+  setHTML(box, html || `<div class="empty">${icon('shield')}<p>Messages in this chat are end-to-end encrypted with post-quantum keys. Only the people in it can read them.</p></div>`);
   hydrateMedia();
   if (atEnd) sc.scrollTop = sc.scrollHeight;
   refreshTyping();
@@ -447,7 +481,8 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && ro
 
 // ---------------- conversation info ----------------
 async function renderInfo() {
-  const v = await m.conv(route.conv); if (!v) return go('empty');
+  const seq = navSeq;
+  const v = await m.conv(route.conv); if (stale(seq)) return; if (!v) return go('empty');
   const title = await m.convTitle(v);
   let body = '';
   if (v.type === 'group') {
@@ -468,13 +503,16 @@ async function renderInfo() {
         <p class="note">Compare these numbers with ${esc(c.name)} in person or on a call. If they match on both phones, nobody is intercepting your messages.</p>
         <button class="btn ${c.verified ? '' : 'tint'}" data-act="verify" data-id="${c.id}">${c.verified ? 'Clear verification' : 'Mark as verified'}</button></section>`;
   }
+  if (stale(seq)) return;
   $('#main').innerHTML = `<header class="bar"><button class="icon" data-act="back" aria-label="Back">${icon('back')}</button><h1 style="font-size:17px">${v.type === 'group' ? 'Group info' : 'Contact info'}</h1></header>
     <div class="scroll"><div class="page"><div class="hero">${avatar(title, v.id, 88, v.type === 'group')}<h1 style="font-size:24px">${esc(title)}</h1></div>${body}</div></div>`;
 }
 
 async function renderAddPick() {
+  const seq = navSeq;
   const v = await m.conv(route.conv);
   const cs = (await m.contacts()).filter((c) => !v.members.includes(c.id) && !c.viaGroup);
+  if (stale(seq) || !$('#addPick')) return;
   $('#addPick').innerHTML = cs.length ? `<section class="section"><h3>Add from your contacts</h3>
     ${cs.map((c) => `<label class="pick"><input type="checkbox" value="${c.id}" />${avatar(c.name, c.id, 36)}<span>${esc(c.name)}</span></label>`).join('')}
     <button class="btn primary" data-act="gAddDo">Add to group</button></section>` : '<p class="note">Everyone in your contacts is already here. Invite more people from the pencil button first.</p>';
@@ -482,9 +520,11 @@ async function renderAddPick() {
 
 // ---------------- new chat / invite ----------------
 async function renderNew(reset = false) {
+  const seq = navSeq;
   const link = await m.myInvite(reset);
   const qr = await QRCode.toString(link, { type: 'svg', margin: 0, errorCorrectionLevel: 'M' });
   const cs = (await m.contacts()).sort((a, b) => a.name.localeCompare(b.name));
+  if (stale(seq)) return;
   $('#main').innerHTML = `<header class="bar"><button class="icon back" data-act="home" aria-label="Back">${icon('back')}</button><h1 style="font-size:17px">New chat</h1></header>
   <div class="scroll"><div class="page">
     <div class="menu"><button data-act="group"><span class="ic">${icon('group')}</span><span>New group<small>Chat, call and walkie-talkie with several people</small></span></button></div>
@@ -504,13 +544,15 @@ async function renderNew(reset = false) {
 }
 
 async function addFromLink(link) {
-  try { const id = await m.acceptInvite(link); toast('Contact added'); go('chat', id); }
+  try { const id = await m.acceptInvite(link); toast('Contact added'); go('chat', id, { replace: route.view === 'new' }); }
   catch (e) { toast(e.message, 4000); }
 }
 
 async function renderGroupNew() {
+  const seq = navSeq;
   const cs = (await m.contacts()).filter((c) => !c.viaGroup).sort((a, b) => a.name.localeCompare(b.name));
-  $('#main').innerHTML = `<header class="bar"><button class="icon" data-act="new" aria-label="Back">${icon('back')}</button><h1 style="font-size:17px">New group</h1></header>
+  if (stale(seq)) return;
+  $('#main').innerHTML = `<header class="bar"><button class="icon" data-act="back" aria-label="Back">${icon('back')}</button><h1 style="font-size:17px">New group</h1></header>
   <div class="scroll"><div class="page">
     <label class="f">Group name<input class="t" id="newGName" maxlength="60" placeholder="Name this group" /></label>
     <section class="section"><h3>Members</h3>${cs.length ? cs.map((c) => `<label class="pick"><input type="checkbox" value="${c.id}" />${avatar(c.name, c.id, 36)}<span>${esc(c.name)}</span></label>`).join('')
@@ -539,14 +581,17 @@ Calls and walkie-talkie: hybrid PQ handshake, SFrame frame encryption over WebRT
 
 // ---------------- call overlay ----------------
 let callTimer = null, ringT = null;
+let overlaySeq = 0;
 async function renderOverlay() {
-  const s = voice.state;
+  const s = voice.state, seq = ++overlaySeq;
   clearInterval(callTimer);
   if (overlay.querySelector('.viewer')) return;
-  if (!s || s.mode !== 'call' || s.hidden) { overlay.innerHTML = ''; return; }
+  if (!s || s.mode !== 'call' || s.hidden) { setHTML(overlay, ''); return; }
   const v = await m.conv(s.conv);
   const title = v ? await m.convTitle(v) : 'Call';
   const caller = s.from ? (await m.contact(s.from))?.name : null;
+  // A newer render (e.g. the call just ended) already ran while we were loading names; don't draw over it.
+  if (seq !== overlaySeq || voice.state !== s || overlay.querySelector('.viewer')) return;
   const status = () => {
     if (s.phase === 'ringing-in') return v?.type === 'group' ? `${esc(caller ?? 'Someone')} is calling the group` : 'Incoming voice call';
     if (s.phase === 'ringing-out') return 'Ringing…';
@@ -555,14 +600,15 @@ async function renderOverlay() {
     const t = fmtDur((Date.now() - s.startedAt) / 1000);
     return v?.type === 'group' ? `${t}, ${n} in call` : t;
   };
-  overlay.innerHTML = `<div class="sheet" role="dialog" aria-label="Voice call">
-    ${avatar(title, s.conv, 112, v?.type === 'group')}<h2>${esc(title)}</h2><p id="callStatus">${status()}</p>
+  setHTML(overlay, `<div class="sheet" role="dialog" aria-label="Voice call">
+    ${avatar(title, s.conv, 112, v?.type === 'group')}<h2>${esc(title)}</h2><p id="callStatus"></p>
     <div class="acts">${s.phase === 'ringing-in'
       ? `<div><button class="round red" data-act="decline" aria-label="Decline">${icon('hang')}</button><small>Decline</small></div>
          <div><button class="round green" data-act="accept" aria-label="Accept">${icon('phone')}</button><small>Accept</small></div>`
       : `<div><button class="round ${s.muted ? 'on' : ''}" data-act="mute" aria-label="${s.muted ? 'Unmute' : 'Mute'}">${icon(s.muted ? 'micoff' : 'mic')}</button><small>${s.muted ? 'Unmute' : 'Mute'}</small></div>
          <div><button class="round" data-act="hideCall" aria-label="Back to chat">${icon('back')}</button><small>Chat</small></div>
-         <div><button class="round red" data-act="hangup" aria-label="End call">${icon('hang')}</button><small>End</small></div>`}</div></div>`;
+         <div><button class="round red" data-act="hangup" aria-label="End call">${icon('hang')}</button><small>End</small></div>`}</div></div>`);
+  $('#callStatus').innerHTML = status();
   if (s.phase === 'live') callTimer = setInterval(() => { const el = $('#callStatus'); if (el) el.innerHTML = status(); }, 1000);
   clearTimeout(ringT);
   if (s.phase === 'ringing-in') ring();
@@ -577,7 +623,7 @@ document.addEventListener('click', async (e) => {
     switch (act) {
       case 'open': go('chat', el.dataset.id); break;
       case 'home': go('empty'); break;
-      case 'back': go('chat', route.conv); break;
+      case 'back': goBack(); break;
       case 'info': go('info', route.conv); break;
       case 'new': go('new'); break;
       case 'group': go('group'); break;
@@ -588,8 +634,8 @@ document.addEventListener('click', async (e) => {
       case 'recCancel': stopRecording(false); break;
       case 'recSend': stopRecording(true); break;
       case 'play': togglePlay(el.dataset.att); break;
-      case 'view': if (el.src) overlay.innerHTML = `<div class="viewer" data-act="closeView"><img src="${el.src}" alt="Photo" /></div>`; break;
-      case 'closeView': overlay.innerHTML = ''; renderOverlay(); break;
+      case 'view': if (el.src) setHTML(overlay, `<div class="viewer" data-act="closeView"><img src="${el.src}" alt="Photo" /></div>`); break;
+      case 'closeView': setHTML(overlay, ''); renderOverlay(); break;
       case 'call': await voice.call(route.conv); break;
       case 'walkie':
         if (voice.state?.mode === 'ptt' && voice.state.conv === route.conv) voice.leaveWalkie();
@@ -600,11 +646,11 @@ document.addEventListener('click', async (e) => {
       case 'decline': voice.decline(); break;
       case 'hangup': voice.hangup(); break;
       case 'mute': voice.setMuted(!voice.state?.muted); break;
-      case 'hideCall': voice.state.hidden = true; renderOverlay(); go('chat', voice.state.conv); break;
+      case 'hideCall': voice.state.hidden = true; renderOverlay(); if (route.view !== 'chat' || route.conv !== voice.state.conv) go('chat', voice.state.conv); else refreshChatChrome(); break;
       case 'showcall': voice.state.hidden = false; renderOverlay(); refreshChatChrome(); break;
       case 'verify': await m.setVerified(el.dataset.id, !(await m.contact(el.dataset.id)).verified); renderInfo(); break;
       case 'contactInfo': await m._ensureConv(el.dataset.id, 'direct'); go('info', el.dataset.id); break;
-      case 'dm': await m._ensureConv(el.dataset.id, 'direct'); go('chat', el.dataset.id); break;
+      case 'dm': await m._ensureConv(el.dataset.id, 'direct'); go('chat', el.dataset.id, { replace: true }); break;
       case 'share': {
         const url = $('#main').dataset.link;
         if (navigator.share) { try { await navigator.share({ title: 'Chat with me on PQTalk', url }); break; } catch {} }
@@ -618,7 +664,11 @@ document.addEventListener('click', async (e) => {
         const name = $('#newGName').value.trim(); const ids = [...document.querySelectorAll('.pick input:checked')].map((i) => i.value);
         if (!name) return toast('Give the group a name');
         if (!ids.length) return toast('Pick at least one member');
-        el.disabled = true; go('chat', await m.createGroup(name, ids)); break;
+        el.disabled = true; {
+          const id = await m.createGroup(name, ids);
+          // Leave "New group" out of the history: Back from the new chat returns to the chat list's path.
+          if (depth() > 0) { afterPop.push(() => go('chat', id, { replace: true })); history.back(); } else go('chat', id);
+        } break;
       }
       case 'gRename': { const n = $('#gName').value.trim(); if (n) { await m.renameGroup(route.conv, n); toast('Group renamed'); } break; }
       case 'gAdd': renderAddPick(); break;
@@ -642,8 +692,11 @@ document.addEventListener('change', async (e) => {
 });
 addEventListener('hashchange', () => {
   const h = new URLSearchParams(location.hash.slice(1));
-  if (h.get('i') && m?.account) { const link = location.hash; history.replaceState(null, '', location.pathname + location.search); addFromLink(link); }
+  if (h.get('i') && m?.account) { const link = location.hash; history.replaceState(history.state, '', location.pathname + location.search); addFromLink(link); }
 });
+
+// Closing the tab mid-call: tell the others now rather than leaving them waiting for a timeout.
+addEventListener('pagehide', () => voice?.hangup(undefined, { keepalive: true }));
 
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('./sw.js').catch(() => {});
 boot();
