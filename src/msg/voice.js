@@ -17,7 +17,7 @@ export class Voice extends EventTarget {
     this.iceServers = iceServers;
     this.audio = new AudioIO();
     this.state = null; // { conv, mode, callId, phase, room, startedAt, muted, from }
-    this.walkieSeen = new Map(); // conv -> { from, ts } (others active on walkie-talkie)
+    this.walkieSeen = new Map(); // conv -> Map(contact id -> ts) of others on walkie-talkie there
     messenger.addEventListener('call', (e) => this._onSignal(e.detail));
   }
   emit() { this.dispatchEvent(new Event('change')); }
@@ -45,7 +45,8 @@ export class Voice extends EventTarget {
     const s = this.state; if (!s?.room) return;
     const live = [...s.room.peers.values()].some((p) => p.status === 'connected');
     if (live && s.phase !== 'live') { s.phase = 'live'; s.startedAt = Date.now(); clearTimeout(s.ringTimer); if (s.mode === 'call') s.room.ptt(!s.muted); }
-    if (s.mode === 'call' && s.phase === 'live' && s.room.peers.size === 0 && s.direct) this.hangup('Call ended');
+    // Everyone else has left (1:1 or group): end it here too instead of sitting in an empty call.
+    if (s.mode === 'call' && s.phase === 'live' && s.room.peers.size === 0) this.hangup(s.direct ? 'Call ended' : 'Everyone left the call');
     this.emit();
   }
 
@@ -77,9 +78,13 @@ export class Voice extends EventTarget {
     this._clear();
   }
 
-  hangup(reason) {
+  hangup(reason, { keepalive = false } = {}) {
     const s = this.state; if (!s) return;
-    if (s.mode === 'call') this.m.callSignal(s.conv, s.phase === 'ringing-out' ? 'cancel' : 'end', { call: s.callId });
+    if (s.mode === 'call') {
+      const op = s.phase === 'ringing-out' ? 'cancel' : s.phase === 'ringing-in' ? 'decline' : 'end';
+      this.m.callSignal(s.conv, op, { call: s.callId }, { keepalive });
+    }
+    if (s.mode === 'ptt') this.m.callSignal(s.conv, 'walkie-off', {}, { keepalive });
     this._clear(reason);
   }
 
@@ -99,7 +104,14 @@ export class Voice extends EventTarget {
     r.ptt(on); this.audio.tone(on ? 'permit' : 'roger', !on); this.emit();
     return true;
   }
-  leaveWalkie() { if (this.state?.mode === 'ptt') this._clear(); }
+  leaveWalkie() { if (this.state?.mode === 'ptt') this.hangup(); }
+
+  /** Others currently on walkie-talkie in a chat (notices older than 10 minutes are ignored). */
+  walkieActive(conv) {
+    const m = this.walkieSeen.get(conv); if (!m) return [];
+    for (const [id, ts] of m) if (Date.now() - ts > 10 * 60_000) m.delete(id);
+    return [...m.keys()];
+  }
 
   _clear(reason) {
     const s = this.state; if (!s) return;
@@ -113,21 +125,44 @@ export class Voice extends EventTarget {
 
   _onSignal(e) {
     const s = this.state;
-    if (e.op === 'walkie') { if (Date.now() - (e.ts ?? 0) < 10 * 60_000) { this.walkieSeen.set(e.conv, { from: e.from, ts: e.ts }); this.emit(); } return; }
+    if (e.op === 'walkie' || e.op === 'walkie-off') {
+      const seen = this.walkieSeen.get(e.conv) ?? new Map();
+      if (e.op === 'walkie' && Date.now() - (e.ts ?? 0) < 10 * 60_000) seen.set(e.from, e.ts);
+      else seen.delete(e.from);
+      this.walkieSeen.set(e.conv, seen);
+      this.emit();
+      return;
+    }
     if (e.op === 'ring') {
       if (Date.now() - (e.ts ?? 0) > RING_MS) return; // stale ring delivered late
       if (s) { if (s.callId !== e.call) this.m.callSignal(e.conv, 'busy', { call: e.call }); return; }
       this.m.conv(e.conv).then((v) => {
-        this.state = { conv: e.conv, mode: 'call', callId: e.call, phase: 'ringing-in', muted: false, from: e.from, direct: v?.type !== 'group' };
+        if (this.state) return;
+        this.state = { conv: e.conv, mode: 'call', callId: e.call, phase: 'ringing-in', muted: false, from: e.from, direct: v?.type !== 'group',
+                       inCall: new Set([e.from]) }; // who is in the call, so a group ring can stop once they've all left
         this.state.ringTimer = setTimeout(() => { if (this.state?.phase === 'ringing-in') this._clear('Missed call'); }, RING_MS);
         this.emit();
       });
       return;
     }
     if (!s || s.callId !== e.call) return;
-    if (e.op === 'cancel' && s.phase === 'ringing-in') this._clear('Missed call');
-    else if ((e.op === 'decline' || e.op === 'busy') && s.direct && s.phase === 'ringing-out') this.hangup(e.op === 'busy' ? 'Busy' : 'Call declined');
-    else if (e.op === 'end' && s.direct) this._clear('Call ended');
-    else if (e.op === 'accept' && s.phase === 'ringing-out') { s.phase = 'connecting'; this.emit(); }
+    if (e.op === 'accept') {
+      s.inCall?.add(e.from);
+      if (s.phase === 'ringing-out') { s.phase = 'connecting'; this.emit(); }
+      return;
+    }
+    if (s.direct) {
+      // 1:1: whatever phase we're in, the other person leaving ends the call for us too.
+      // (A caller can give up at the same moment the callee answers; the callee must not stay "Connecting".)
+      if (e.op === 'cancel') this._clear(s.phase === 'ringing-in' ? 'Missed call' : 'Call ended');
+      else if (e.op === 'end') this._clear('Call ended');
+      else if (e.op === 'decline' || e.op === 'busy') this._clear(e.op === 'busy' ? 'Busy' : 'Call declined');
+      return;
+    }
+    // Group: the caller hanging up before anyone joined stops everyone's ringing.
+    // Once people are in, each person leaves on their own and the room tracks who is left.
+    if (s.phase !== 'ringing-in') return;
+    if (e.op === 'cancel') return this._clear('Missed call');
+    if (e.op === 'end' || e.op === 'decline') { s.inCall.delete(e.from); if (!s.inCall.size) this._clear('Missed call'); }
   }
 }

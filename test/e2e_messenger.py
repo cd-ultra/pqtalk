@@ -4,7 +4,7 @@
   VITE_SERVER_URL=http://127.0.0.1:8787 npx vite build && npx vite preview --port 4173 &
   python3 test/e2e_messenger.py
 """
-import base64, os, struct, sys, time, zlib
+import base64, os, re, struct, sys, time, zlib
 from playwright.sync_api import sync_playwright
 
 URL = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:4173/"
@@ -37,8 +37,9 @@ def open_conv(p, name):
     for _ in range(4):
         if p.locator("#side").is_visible(): break
         p.evaluate("document.querySelector('#main .back, #main [data-act=back]')?.click()"); time.sleep(0.3)
-    p.locator(".conv", has_text=name).first.click()
-    p.wait_for_selector("#chatBar")
+    # Match the chat's title, not its preview line ("George: hi" in a group row also contains "George").
+    p.locator(".conv").filter(has=p.locator(".row1 b", has_text=re.compile(f"^{re.escape(name)}$"))).first.click()
+    p.wait_for_selector("#chatBar .back")
 
 with sync_playwright() as pw:
     b = pw.chromium.launch(executable_path="/usr/bin/google-chrome", headless=True, args=[
@@ -140,8 +141,51 @@ with sync_playwright() as pw:
     if SHOTS: A.screenshot(path=f"{SHOTS}/walkie.png")
     A.keyboard.up("Space")
     ok(talking and e2 > 0.0005, f"push-to-talk audio reaches Priya (energy {e2:.4f})")
+    A.click("[data-act=walkieLeave]"); C.click("[data-act=walkieLeave]")
+    ok(wait(lambda: ev(A, "window.__pq.voice.state === null") and ev(C, "window.__pq.voice.state === null"), timeout=10), "leaving walkie-talkie works")
+
+    # ---- walkie banner clears when the person leaves ----
+    A.click("[data-act=walkie]")
+    ok(wait(lambda: C.locator(".banner", has_text="walkie").count() > 0, timeout=15), "banner shows while someone is on walkie-talkie")
+    time.sleep(1); A.click("[data-act=walkieLeave]")
+    ok(wait(lambda: C.locator(".banner", has_text="walkie").count() == 0, timeout=15), "banner disappears when they leave")
+
+    # ---- navigation ----
+    open_conv(A, "Sam Ortiz")
+    A.click("#chatBar [data-act=info]"); A.wait_for_selector("text=Safety number")
+    A.click("#main [data-act=back]")
+    ok(wait(lambda: A.locator("#chatBar").count() > 0 and "Sam" in A.inner_text("#chatBar"), timeout=5), "in-app Back returns from contact info to the chat")
+    A.go_back()
+    ok(wait(lambda: A.locator("#side").is_visible(), timeout=5), "phone/browser Back returns from a chat to the chat list")
+    open_conv(A, "Sam Ortiz")
+    A.evaluate("window.__backBtn = document.querySelector('#chatBar .back')")
+    open_conv(B, "George"); B.fill("#input", "redraw check"); B.click("#sendBtn")
+    ok(wait(lambda: "redraw check" in A.inner_text("#msgs"), timeout=15) and A.evaluate("window.__backBtn.isConnected"),
+       "header buttons stay put while new messages and receipts arrive")
+    A.click("#chatBar .back")
+    ok(wait(lambda: A.locator("#side").is_visible(), timeout=5), "header Back works after background updates")
+
+    # ---- hang-up paths ----
+    open_conv(A, "Sam Ortiz")
+    A.click("[data-act=call]"); wait(lambda: B.locator("[data-act=accept]").count() > 0, timeout=15); B.click("[data-act=accept]")
+    wait(lambda: ev(A, "window.__pq.voice.state?.phase === 'live'"), timeout=25)
+    B.click("[data-act=hangup]")
+    ok(wait(lambda: ev(A, "window.__pq.voice.state === null"), timeout=10), "callee hanging up ends the call for the caller")
+    time.sleep(1)
+    A.click("[data-act=call]"); wait(lambda: B.locator("[data-act=accept]").count() > 0, timeout=15)
+    B.evaluate("window.__pq.voice.accept()"); A.evaluate("window.__pq.voice.hangup()")
+    ok(wait(lambda: ev(A, "window.__pq.voice.state === null") and ev(B, "window.__pq.voice.state === null"), timeout=15),
+       "caller giving up as the callee answers leaves nobody stuck connecting")
+    time.sleep(1)
+    open_conv(A, "Weekend trip"); open_conv(B, "Weekend trip"); open_conv(C, "Weekend trip")
+    A.click("[data-act=call]")
+    wait(lambda: B.locator("[data-act=accept]").count() > 0 and C.locator("[data-act=accept]").count() > 0, timeout=15)
+    B.click("[data-act=accept]")
+    wait(lambda: ev(A, "window.__pq.voice.state?.phase === 'live'") and ev(B, "window.__pq.voice.state?.phase === 'live'"), timeout=25)
+    A.click("[data-act=hangup]")
+    ok(wait(lambda: ev(B, "window.__pq.voice.state === null"), timeout=15), "last person left in a group call is hung up too")
+    ok(wait(lambda: ev(C, "window.__pq.voice.state === null"), timeout=15), "members who never answered stop ringing once the call is over")
     if SHOTS:
-        A.click("[data-act=walkieLeave]"); C.click("[data-act=walkieLeave]")
         open_conv(A, "Sam Ortiz"); time.sleep(0.5); A.screenshot(path=f"{SHOTS}/chat.png")
         A.click("[data-act=info]"); time.sleep(0.4); A.screenshot(path=f"{SHOTS}/safety.png")
         A.evaluate("document.querySelector('#main [data-act=back]').click()"); time.sleep(0.4); A.evaluate("document.querySelector('#main .back').click()"); A.click("#side [data-act=new]"); A.wait_for_selector(".qr svg"); A.screenshot(path=f"{SHOTS}/invite.png")

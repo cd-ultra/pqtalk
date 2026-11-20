@@ -12,12 +12,12 @@ export class Api {
     const bodyHash = bytesToHex(sha256(body));
     return `${ts}.${b64(this.identity.sign(utf8(`${method} ${path} ${ts} ${bodyHash}`)))}`;
   }
-  async _req(method, path, obj, { signed = false, raw } = {}) {
+  async _req(method, path, obj, { signed = false, raw, keepalive = false } = {}) {
     const body = raw ?? (obj === undefined ? new Uint8Array() : utf8(JSON.stringify(obj)));
     const headers = {};
     if (!raw && obj !== undefined) headers['content-type'] = 'application/json';
     if (signed) headers['x-auth'] = this._sign(method, path, body);
-    const r = await fetch(this.base + path, { method, headers, body: method === 'GET' ? undefined : body, referrerPolicy: 'no-referrer' });
+    const r = await fetch(this.base + path, { method, headers, body: method === 'GET' ? undefined : body, referrerPolicy: 'no-referrer', keepalive });
     if (!r.ok) {
       let msg = `${r.status}`; try { msg = (await r.json()).error ?? msg; } catch {}
       const e = new Error(`Server: ${msg}`); e.status = r.status; throw e;
@@ -28,8 +28,8 @@ export class Api {
   register() { return this._req('PUT', `/v1/mb/${this.mailbox}`, { ik: b64(this.identity.pk) }, { signed: true }); }
   publishKeys(bundle, opks) { return this._req('PUT', `/v1/mb/${this.mailbox}/keys`, { bundle, opks }, { signed: true }); }
   fetchBundle(mb) { return this._req('GET', `/v1/mb/${mb}/bundle`); }
-  send(mb, envelope, { eph = false } = {}) {
-    return this._req('POST', `/v1/mb/${mb}/msg${eph ? '?eph=1' : ''}`, undefined, { raw: utf8(JSON.stringify(envelope)) });
+  send(mb, envelope, { eph = false, keepalive = false } = {}) {
+    return this._req('POST', `/v1/mb/${mb}/msg${eph ? '?eph=1' : ''}`, undefined, { raw: utf8(JSON.stringify(envelope)), keepalive });
   }
   fetchMessages() { return this._req('GET', `/v1/mb/${this.mailbox}/msgs`, undefined, { signed: true }); }
   ack(ids) { return this._req('POST', `/v1/mb/${this.mailbox}/ack`, { ids }, { signed: true }); }

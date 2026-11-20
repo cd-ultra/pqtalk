@@ -155,8 +155,8 @@ export class Messenger extends EventTarget {
     const env = await this._encryptFor(c, payload);
     this._post(c, env, payload, opts).catch(() => {});
   }
-  async _post(c, env, payload, { eph = false } = {}) {
-    try { return await this.api.send(c.mb, env, { eph }); }
+  async _post(c, env, payload, { eph = false, keepalive = false } = {}) {
+    try { return await this.api.send(c.mb, env, { eph, keepalive }); }
     catch (e) {
       if (eph || e.status) throw e; // ephemeral or rejected: don't retry
       await db.put('outbox', { id: randomId(8), mb: c.mb, env, msgId: payload.id, ts: now() });
@@ -470,16 +470,16 @@ export class Messenger extends EventTarget {
     return codeFromBytes(kdf(unb64(secret), null, `voice-room ${callId}`, 20));
   }
 
-  async callSignal(convId, op, extra = {}) {
+  async callSignal(convId, op, extra = {}, opts = {}) {
     const v = await db.get('convs', convId);
     const payload = { t: 'call', op, ...extra, ...(v?.type === 'group' ? { g: convId.slice(2) } : {}) };
-    for (const c of await this.recipients(convId)) this._send(c, payload).catch(() => {});
+    for (const c of await this.recipients(convId)) this._send(c, payload, opts).catch(() => {});
   }
 
   // ---------------- queries ----------------
-  contact(id) { return db.get('contacts', id); }
+  contact(id) { return id ? db.get('contacts', id) : Promise.resolve(undefined); }
   contacts() { return db.all('contacts'); }
-  conv(id) { return db.get('convs', id); }
+  conv(id) { return id ? db.get('convs', id) : Promise.resolve(undefined); }
   async convs() { return (await db.all('convs')).sort((a, b) => b.lastTs - a.lastTs); }
   messages(id) { return db.messagesFor(id); }
   safety(c) { return safetyNumber(this.identity.pk, unb64(c.ik)); }
